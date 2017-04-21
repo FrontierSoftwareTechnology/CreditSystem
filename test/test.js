@@ -26,10 +26,22 @@ function test(){
                 console.log(err);
             }
             else {
+                console.log("credit before " + result[0].credits);
                 updateUserCredits(db, result[1], result[0]);
+                setTimeout(checkResult, 3000);
             }
         });
     });
 }
 
+function checkResult() {
+    var dbConnector = require('../db/dbConnector');
+    dbConnector(function(db) {
+        db.collection('users').find({uid: "0"}).toArray(function (err, user) {
+            if (err)
+                console.log(err);
+            console.log("credit after " + user[0].credits);
+        });
+    });
+}
 module.exports = test;

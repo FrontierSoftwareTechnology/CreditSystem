@@ -4,35 +4,56 @@
 
 var async = require('async');
 
+var debugMode = {
+    enable : 1
+};
+
 var dailyCreditLimit = {
     read : 100,
     comment : 200
 }
 
+/*
+*   please modify this func according to your collection names
+* */
+function getCollections(DB) {
+    var cols = {
+        articleCollection : DB.collection('articles'),
+        userCollection : DB.collection('users'),
+        creditLogCollection : DB.collection('creditLog'),
+    }
+    return cols;
+}
+
+/*
+*   for reader: credit += 5 if readTimeLength > 15 && dailyCredit4Read < 100
+*   for writer: credit += 0 if readTimeLength <= 15
+*                         2 if readTimes <= 100
+*                         1 if readTimes <= 1000
+*                         0.5 if readTimes > 1000
+* */
 function doRead(DB,
                 user_article_read_table,
                 user_table
 ){
-    //please ensure below collections are right!
-    var articleCollection = DB.collection('articles');
-    var userCollection =  DB.collection('users');
-    var creditLogCollection =  DB.collection('creditLog');
+    var collections = getCollections(DB);
+    var articleCollection = collections.articleCollection;
+    var userCollection =  collections.userCollection;
+    var creditLogCollection =  collections.creditLogCollection;
     //for reader
     var readerID = user_table.uid;
     if(!user_table.dailyCredit4Read){
         user_table.dailyCredit4Read = 0;
     }
     //ensure daily limit not exceeded
-    var credit2Add;
+    var credit2Add = 0;
     if(user_table.dailyCredit4Read < dailyCreditLimit.read ){
-        credit2Add = credit4Read(user_article_read_table.readTimeLength);
+        credit2Add = credit4Read(user_article_read_table.readTimeLength);           //update credit
         if(credit2Add + user_table.dailyCredit4Read > dailyCreditLimit.read){
             credit2Add = dailyCreditLimit.read - user_table.dailyCredit4Read;
         }
-        user_table.dailyCredit4Read += credit2Add;
-        user_table.credits += credit2Add;
     }
-    userCollection.save(user_table, function(err){
+    userCollection.update({'uid':user_table.uid},{$inc:{'dailyCredit4Read':credit2Add,'credits': credit2Add}}, function(err){      //save log
         if(err)
             console.log(err);
     });
@@ -42,8 +63,10 @@ function doRead(DB,
         reason : 'read',
         aid : user_article_read_table.aid,
         readTimeLength : user_article_read_table.readTimeLength,
-        timeStamp : user_article_read_table.timeStamp
+        timestamp : user_article_read_table.timestamp
     }
+    if(debugMode.enable)
+        console.log(log);
     creditLogCollection.insert(log, function(err){
         if(err)
             console.log(err);
@@ -61,23 +84,24 @@ function doRead(DB,
         function(article, callback){        //find author by article author
             userCollection.find({"uname" : article.author}).toArray( function(err, author) {
                 author = author[0];
-                var credit2Add;
+                var credit2Add = 0;             //update credit
                 credit2Add = credit4BeRead(user_article_read_table.readTimeLength, article.readingNum);
-                author.credits += credit2Add;
-                userCollection.save(author, function(err){
+                userCollection.update({'uid':author.uid},{$inc:{'credits': credit2Add}}, function(err){
                     if(err)
                         console.log(err);
                 });
 
-                var log = {
+                var log = {                 //save log
                     uid : author.uid,
                     change : credit2Add,
                     reason : 'beRead',
                     aid : user_article_read_table.aid,
                     uid2 : readerID,
                     readTimeLength : user_article_read_table.readTimeLength,
-                    timeStamp : user_article_read_table.timeStamp
+                    timestamp : user_article_read_table.timestamp
                 }
+                if(debugMode.enable)
+                    console.log(log);
                 creditLogCollection.insert(log, function(err){
                     if(err)
                         console.log(err);
@@ -90,14 +114,20 @@ function doRead(DB,
                 console.log(err);
             });
 }
+
+/*
+*    for writer: credit += 10 if supportNum <= 100
+*                          5  if supportNum <= 1000
+*                          2  if supportNum > 1000
+* */
 function doSupport(DB,
                 user_article_read_table,
                 user_table
 ){
-    //please ensure below collections are right!
-    var articleCollection = DB.collection('articles');
-    var userCollection =  DB.collection('users');
-    var creditLogCollection =  DB.collection('creditLog');
+    var collections = getCollections(DB);
+    var articleCollection = collections.articleCollection;
+    var userCollection =  collections.userCollection;
+    var creditLogCollection =  collections.creditLogCollection;
     //for writer
     async.waterfall([
         function(callback){                 //find article by aid
@@ -111,23 +141,24 @@ function doSupport(DB,
         function(article, callback){        //find author by article author
             userCollection.find({"uname" : article.author}).toArray( function(err, author) {
                 author = author[0];
-                var credit2Add;
+                var credit2Add = 0;             //update credit
                 credit2Add = credit4BeSupported(article.supportNum);
-                author.credits += credit2Add;
-                userCollection.save(author, function(err){
+                userCollection.update({'uid':author.uid},{$inc:{'credits': credit2Add}}, function(err){
                     if(err)
                         console.log(err);
                 });
 
-                var log = {
+                var log = {                 //save log
                     uid : author.uid,
                     change : credit2Add,
                     reason : 'beSupported',
                     aid : user_article_read_table.aid,
                     uid2 : user_table.uid,
                     readTimeLength : user_article_read_table.readTimeLength,
-                    timeStamp : user_article_read_table.timeStamp
+                    timestamp : user_article_read_table.timestamp
                 }
+                if(debugMode.enable)
+                    console.log(log);
                 creditLogCollection.insert(log, function(err){
                     if(err)
                         console.log(err);
@@ -140,42 +171,50 @@ function doSupport(DB,
             console.log(err);
     });
 }
+
+/*
+*   for reader: credit += 10 if commentLength >= 5 && dailyCredit4Comment < 200
+*   for writer: credit += 0 if commentLength < 5
+*                         20 if commentNums <= 100
+*                         10 if commentNums <= 1000
+*                         5  if commentNums > 1000
+* */
 function doComment(DB,
                 user_article_read_table,
                 user_table
 ){
-    //please ensure below collections are right!
-    var articleCollection = DB.collection('articles');
-    var userCollection =  DB.collection('users');
-    var creditLogCollection =  DB.collection('creditLog');
+    var collections = getCollections(DB);
+    var articleCollection = collections.articleCollection;
+    var userCollection =  collections.userCollection;
+    var creditLogCollection =  collections.creditLogCollection;
     //for reader
     var readerID = user_table.uid;
     if(!user_table.dailyCredit4Comment){
         user_table.dailyCredit4Comment = 0;
     }
     //ensure daily limit not exceeded
-    var credit2Add;
+    var credit2Add = 0;
     if(user_table.dailyCredit4Comment < dailyCreditLimit.comment ){
         credit2Add = credit4Comment(user_article_read_table.comment.length);
-        if(credit2Add + user_table.dailyCredit4Comment > dailyCreditLimit.comment){
+        if(credit2Add + user_table.dailyCredit4Comment > dailyCreditLimit.comment){         //update credit
             credit2Add = dailyCreditLimit.comment - user_table.dailyCredit4Comment;
         }
-        user_table.dailyCredit4Comment += credit2Add;
-        user_table.credits += credit2Add;
     }
-    userCollection.save(user_table, function(err){
+    userCollection.update({'uid':user_table.uid},{$inc:{'dailyCredit4Comment':credit2Add,'credits': credit2Add}}, function(err){
         if(err)
             console.log(err);
     });
 
-    var log = {
+    var log = {                     //save log
         uid : user_table.uid,
         change : credit2Add,
         reason : 'comment',
         aid : user_article_read_table.aid,
         readTimeLength : user_article_read_table.readTimeLength,
-        timeStamp : user_article_read_table.timeStamp
+        timestamp : user_article_read_table.timestamp
     }
+    if(debugMode.enable)
+        console.log(log);
     creditLogCollection.insert(log, function(err){
         if(err)
             console.log(err);
@@ -194,23 +233,24 @@ function doComment(DB,
         function(article, callback){        //find author by article author
             userCollection.find({"uname" : article.author}).toArray( function(err, author) {
                 author = author[0];
-                var credit2Add;
+                var credit2Add;             //update credit
                 credit2Add = credit4BeCommented(user_article_read_table.comment.length, article.commentNum);
-                author.credits += credit2Add;
-                userCollection.save(author, function(err){
+                userCollection.update({'uid':author.uid},{$inc:{'credits': credit2Add}}, function(err){
                     if(err)
                         console.log(err);
                 });
 
-                var log = {
+                var log = {                 //save log
                     uid : author.uid,
                     change : credit2Add,
                     reason : 'beCommented',
                     aid : user_article_read_table.aid,
-                    uid2 : user_table.uid,
+                    uid2 : user_table.uid,              //commenter
                     comment : user_article_read_table.comment,
-                    timeStamp : user_article_read_table.timeStamp
+                    timestamp : user_article_read_table.timestamp
                 }
+                if(debugMode.enable)
+                    console.log(log);
                 creditLogCollection.insert(log, function(err){
                     if(err)
                         console.log(err);
@@ -223,14 +263,21 @@ function doComment(DB,
             console.log(err);
     });
 }
+
+/*
+*   for writer: credit += 40 if collectNum <= 10
+*                         20 if collectNum <= 100
+*                         10 if collcetNum <= 1000
+*                         5  if collectNum > 1000
+* */
 function doCollect(DB,
                 user_article_read_table,
                 user_table
 ){
-    //please ensure below collections are right!
-    var articleCollection = DB.collection('articles');
-    var userCollection =  DB.collection('users');
-    var creditLogCollection =  DB.collection('creditLog');
+    var collections = getCollections(DB);
+    var articleCollection = collections.articleCollection;
+    var userCollection =  collections.userCollection;
+    var creditLogCollection =  collections.creditLogCollection;
     //for writer
     async.waterfall([
         function(callback){                 //find article by aid
@@ -244,24 +291,25 @@ function doCollect(DB,
         function(article, callback){        //find author by article author
             userCollection.find({"uname" : article.author}).toArray( function(err, author) {
                 author = author[0];
-                var credit2Add;
-                if(!article.collectNum)
+                var credit2Add = 0;
+                if(!article.collectNum)     //origin record contains no filed named collectNum
                     article.collectNum = 0;
-                credit2Add = credit4BeCollected(article.collectNum);
-                author.credits += credit2Add;
-                userCollection.save(author, function(err){
+                credit2Add = credit4BeCollected(article.collectNum);        //update credit
+                userCollection.update({'uid':author.uid},{$inc:{'credits': credit2Add}}, function(err){
                     if(err)
                         console.log(err);
                 });
 
-                var log = {
+                var log = {                 //save log
                     uid : author.uid,
                     change : credit2Add,
                     reason : 'beCollected',
                     aid : user_article_read_table.aid,
-                    uid2 : user_table.uid,
-                    timeStamp : user_article_read_table.timeStamp
+                    uid2 : user_table.uid,              //collector
+                    timestamp : user_article_read_table.timestamp
                 }
+                if(debugMode.enable)
+                    console.log(log);
                 creditLogCollection.insert(log, function(err){
                     if(err)
                         console.log(err);
@@ -274,6 +322,10 @@ function doCollect(DB,
             console.log(err);
     });
 }
+
+/*
+*   belows are specific rules for credit update, please modify them freely
+* */
 
 function credit4Read(readTimeLength) {
     //assert(readTimeLength >= 0);
@@ -338,5 +390,6 @@ module.exports = {
     doRead : doRead,
     doSupport : doSupport,
     doComment : doComment,
-    doCollect : doCollect
+    doCollect : doCollect,
+    debugMode : debugMode
 }
